@@ -1,0 +1,796 @@
+{
+  "name": "Telegram AI-bot Enhanced (RAG + Context Memory)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["*"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [20, 400],
+      "webhookId": "telegram-webhook-001",
+      "credentials": {
+        "telegramApi": {
+          "id": "70",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message.text",
+              "value": "={{ $json?.message?.text || \"\" }}"
+            },
+            {
+              "name": "telegram_id",
+              "value": "={{ $json?.message?.from?.id }}"
+            },
+            {
+              "name": "first_name",
+              "value": "={{ $json?.message?.from?.first_name || \"User\" }}"
+            },
+            {
+              "name": "language_code",
+              "value": "={{ $json?.message?.from?.language_code || \"id\" }}"
+            }
+          ]
+        },
+        "options": {
+          "dotNotation": true
+        }
+      },
+      "id": "preprocessing",
+      "name": "PreProcessing",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO users (telegram_id, first_name, last_name, username, language_code)\nVALUES ({{ $json.telegram_id }}, '{{ $json.first_name }}', '{{ $json?.message?.from?.last_name || \"\" }}', '{{ $json?.message?.from?.username || \"\" }}', '{{ $json.language_code }}')\nON CONFLICT (telegram_id)\nDO UPDATE SET\n    first_name = EXCLUDED.first_name,\n    last_name = EXCLUDED.last_name,\n    username = EXCLUDED.username,\n    language_code = EXCLUDED.language_code,\n    updated_at = CURRENT_TIMESTAMP\nRETURNING *;"
+      },
+      "id": "get-or-create-user",
+      "name": "Get or Create User",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [460, 400],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT message_role, message_content, created_at\nFROM conversations\nWHERE user_id = '{{ $json.id }}'\nORDER BY created_at DESC\nLIMIT 10;"
+      },
+      "id": "load-conversation-history",
+      "name": "Load Conversation History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO conversations (user_id, message_role, message_content, message_metadata)\nVALUES ('{{ $('Get or Create User').item.json.id }}', 'user', $${{ $('PreProcessing').item.json['message.text'] }}$$, '{}'::jsonb)\nRETURNING *;"
+      },
+      "id": "save-user-message",
+      "name": "Save User Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [680, 500],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format conversation history for OpenAI\nconst historyNode = $input.first();\nconst settingsNode = $('Settings').first();\nconst preprocessing = $('PreProcessing').first();\n\n// Get history data (may be empty for new users)\nconst historyData = historyNode.json;\nlet conversationHistory = [];\n\nif (Array.isArray(historyData)) {\n  // Reverse to get chronological order\n  conversationHistory = historyData.reverse().map(msg => ({\n    role: msg.message_role,\n    content: msg.message_content\n  }));\n} else if (historyData.message_role) {\n  conversationHistory = [{\n    role: historyData.message_role,\n    content: historyData.message_content\n  }];\n}\n\n// Limit context window (keep last 8 messages to save tokens)\nif (conversationHistory.length > 8) {\n  conversationHistory = conversationHistory.slice(-8);\n}\n\n// Prepare output\nreturn {\n  json: {\n    conversation_history: conversationHistory,\n    has_history: conversationHistory.length > 0,\n    history_count: conversationHistory.length,\n    current_message: preprocessing.json['message.text'],\n    user_id: $('Get or Create User').item.json.id,\n    telegram_id: preprocessing.json.telegram_id,\n    first_name: preprocessing.json.first_name,\n    ...settingsNode.json\n  }\n};"
+      },
+      "id": "format-conversation-context",
+      "name": "Format Conversation Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-ada-002",
+        "text": "={{ $json.current_message }}",
+        "resource": "text"
+      },
+      "id": "generate-query-embedding",
+      "name": "Generate Query Embedding",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [900, 500],
+      "credentials": {
+        "openAiApi": {
+          "id": "63",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT\n    e.chunk_text,\n    d.title,\n    d.source,\n    d.category,\n    1 - (e.embedding <=> '{{ $json.embedding }}'::vector) as similarity\nFROM embeddings e\nJOIN documents d ON e.document_id = d.id\nWHERE d.is_active = true\n  AND (1 - (e.embedding <=> '{{ $json.embedding }}'::vector)) > 0.7\nORDER BY e.embedding <=> '{{ $json.embedding }}'::vector\nLIMIT 5;"
+      },
+      "id": "search-knowledge-base",
+      "name": "Search Knowledge Base (RAG)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1120, 500],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge conversation context with RAG results\nconst contextNode = $('Format Conversation Context').first();\nconst ragNode = $input.first();\n\n// Get RAG results\nconst ragResults = ragNode.json;\nlet ragContext = \"\";\n\nif (Array.isArray(ragResults) && ragResults.length > 0) {\n  ragContext = \"\\n\\nRelevant Knowledge Base Information:\\n\";\n  ragResults.forEach((result, idx) => {\n    ragContext += `${idx + 1}. [${result.title}] ${result.chunk_text}\\n`;\n  });\n} else if (ragResults.chunk_text) {\n  ragContext = `\\n\\nRelevant Knowledge Base Information:\\n1. [${ragResults.title}] ${ragResults.chunk_text}\\n`;\n}\n\n// Prepare final context\nreturn {\n  json: {\n    ...contextNode.json,\n    rag_context: ragContext,\n    has_rag_results: ragContext !== \"\",\n    rag_count: Array.isArray(ragResults) ? ragResults.length : (ragResults.chunk_text ? 1 : 0)\n  }\n};"
+      },
+      "id": "merge-context-and-rag",
+      "name": "Merge Context and RAG",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "values": {
+          "number": [
+            {
+              "name": "model_temperature",
+              "value": 0.8
+            },
+            {
+              "name": "token_length",
+              "value": 800
+            }
+          ],
+          "string": [
+            {
+              "name": "system_command",
+              "value": "=Kamu adalah Elisabeth, AI assistant yang ramah dan membantu. User name is {{ $json.first_name }}. Kamu fasih berbahasa Indonesia dan English. Kamu simple dalam berkomunikasi, tidak terlalu banyak menggunakan emote/emoji.{{ $json.has_rag_results ? '\\n\\nGunakan informasi dari knowledge base berikut jika relevan dengan pertanyaan user:\\n' + $json.rag_context : '' }}"
+            },
+            {
+              "name": "bot_typing",
+              "value": "={{ $json.current_message?.startsWith('/image') ? \"upload_photo\" : \"typing\" }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "settings",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "action": "={{ $json.bot_typing }}",
+        "chatId": "={{ $json.telegram_id }}",
+        "operation": "sendChatAction"
+      },
+      "id": "send-typing-action",
+      "name": "Send Typing Action",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1780, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "70",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "merge",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value2": "/",
+              "operation": "notStartsWith"
+            },
+            {
+              "output": 1,
+              "value2": "/start",
+              "operation": "startsWith"
+            },
+            {
+              "output": 2,
+              "value2": "/image ",
+              "operation": "startsWith"
+            },
+            {
+              "output": 3,
+              "value2": "/adddoc",
+              "operation": "startsWith"
+            }
+          ]
+        },
+        "value1": "={{ $json.current_message }}",
+        "dataType": "string",
+        "fallbackOutput": 4
+      },
+      "id": "check-command",
+      "name": "CheckCommand",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "={{ $json.system_command }}"
+            },
+            "={{ $json.conversation_history }}",
+            {
+              "content": "={{ $json.current_message }}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": "={{ $json.token_length }}",
+          "temperature": "={{ $json.model_temperature }}"
+        },
+        "resource": "chat"
+      },
+      "id": "chat-mode",
+      "name": "Chat_mode",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [2440, 100],
+      "credentials": {
+        "openAiApi": {
+          "id": "63",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-3.5-turbo",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "={{ $json.system_command }}"
+            },
+            {
+              "content": "=This is the first message from a new user. Please welcome them warmly in {{ $json.language_code }} language. Keep it brief and friendly."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 200,
+          "temperature": 0.9
+        },
+        "resource": "chat"
+      },
+      "id": "greeting",
+      "name": "Greeting",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [2440, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "63",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "prompt": "={{ $json.current_message.split(' ').slice(1).join(' ') }}",
+        "options": {
+          "n": 1,
+          "size": "512x512"
+        },
+        "resource": "image",
+        "responseFormat": "imageUrl"
+      },
+      "id": "create-image",
+      "name": "Create an Image",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [2440, 500],
+      "credentials": {
+        "openAiApi": {
+          "id": "63",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle /adddoc command to add documents to knowledge base\nconst message = $json.current_message;\nconst parts = message.split('|');\n\nif (parts.length < 3) {\n  return {\n    json: {\n      error: true,\n      message: \"Format salah! Gunakan: /adddoc |Title| |Content| [Category]\"\n    }\n  };\n}\n\nconst title = parts[1].trim();\nconst content = parts[2].trim();\nconst category = parts[3] ? parts[3].trim() : 'general';\n\nreturn {\n  json: {\n    title: title,\n    content: content,\n    category: category,\n    telegram_id: $json.telegram_id,\n    error: false\n  }\n};"
+      },
+      "id": "parse-add-doc",
+      "name": "Parse Add Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 700]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO documents (title, content, category, source)\nVALUES ('{{ $json.title }}', $${{ $json.content }}$$, '{{ $json.category }}', 'user')\nRETURNING *;"
+      },
+      "id": "save-document",
+      "name": "Save Document",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2660, 700],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-ada-002",
+        "text": "={{ $json.content }}",
+        "resource": "text"
+      },
+      "id": "generate-doc-embedding",
+      "name": "Generate Doc Embedding",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [2880, 700],
+      "credentials": {
+        "openAiApi": {
+          "id": "63",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO embeddings (document_id, chunk_text, chunk_index, embedding)\nVALUES ('{{ $('Save Document').item.json.id }}', $${{ $('Save Document').item.json.content }}$$, 0, '{{ $json.embedding }}'::vector)\nRETURNING *;"
+      },
+      "id": "save-embedding",
+      "name": "Save Embedding",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [3100, 700],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO conversations (user_id, message_role, message_content, model_used)\nVALUES ('{{ $('Settings').item.json.user_id }}', 'assistant', $${{ $json.message?.content || $json.content }}$$, 'gpt-4')\nRETURNING *;"
+      },
+      "id": "save-assistant-response",
+      "name": "Save Assistant Response",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2660, 100],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "={{ $('Chat_mode').item.json.message?.content || $('Greeting').item.json.message?.content }}",
+        "chatId": "={{ $('Settings').item.json.telegram_id }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "text-reply",
+      "name": "Text Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2880, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "70",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "file": "={{ $json.url }}",
+        "chatId": "={{ $('Settings').item.json.telegram_id }}",
+        "operation": "sendPhoto",
+        "additionalFields": {}
+      },
+      "id": "send-image",
+      "name": "Send Image",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2660, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "70",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "=✅ Document berhasil ditambahkan ke knowledge base!\\n\\n📝 Title: {{ $('Save Document').item.json.title }}\\n📁 Category: {{ $('Save Document').item.json.category }}\\n\\nDocument ID: {{ $('Save Document').item.json.id }}",
+        "chatId": "={{ $('Settings').item.json.telegram_id }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "doc-added-confirmation",
+      "name": "Doc Added Confirmation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [3320, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "70",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "=Sorry, {{ $json.first_name }}! Command tidak didukung.\\n\\nAvailable commands:\\n• Just type text - Chat dengan AI\\n• /start - Welcome message\\n• /image [prompt] - Generate gambar\\n• /adddoc |Title| |Content| [Category] - Tambah dokumen ke knowledge base\\n\\nContoh:\\n`/image a cute kitten with big eyes`\\n`/adddoc |Bot Info| |Elisabeth adalah AI assistant| tutorial`",
+        "chatId": "={{ $json.telegram_id }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "error-message",
+      "name": "Send Error Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2440, 900],
+      "credentials": {
+        "telegramApi": {
+          "id": "70",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "PreProcessing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PreProcessing": {
+      "main": [
+        [
+          {
+            "node": "Get or Create User",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get or Create User": {
+      "main": [
+        [
+          {
+            "node": "Load Conversation History",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save User Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Conversation History": {
+      "main": [
+        [
+          {
+            "node": "Format Conversation Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save User Message": {
+      "main": [
+        [
+          {
+            "node": "Generate Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Conversation Context": {
+      "main": [
+        [
+          {
+            "node": "Merge Context and RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Search Knowledge Base (RAG)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Knowledge Base (RAG)": {
+      "main": [
+        [
+          {
+            "node": "Merge Context and RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Context and RAG": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Send Typing Action",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Typing Action": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "CheckCommand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckCommand": {
+      "main": [
+        [
+          {
+            "node": "Chat_mode",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Greeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create an Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Add Document",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat_mode": {
+      "main": [
+        [
+          {
+            "node": "Save Assistant Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Greeting": {
+      "main": [
+        [
+          {
+            "node": "Save Assistant Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Assistant Response": {
+      "main": [
+        [
+          {
+            "node": "Text Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an Image": {
+      "main": [
+        [
+          {
+            "node": "Send Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Add Document": {
+      "main": [
+        [
+          {
+            "node": "Save Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Document": {
+      "main": [
+        [
+          {
+            "node": "Generate Doc Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Doc Embedding": {
+      "main": [
+        [
+          {
+            "node": "Save Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Embedding": {
+      "main": [
+        [
+          {
+            "node": "Doc Added Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "tags": [
+    {
+      "name": "telegram",
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "ai",
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "rag",
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    }
+  ]
+}
