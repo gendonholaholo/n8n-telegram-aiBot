@@ -1,4 +1,4 @@
-# 🤖 n8n Telegram AI Bot with RAG & Context Memory
+# n8n Telegram AI Bot with RAG & Context Memory
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![n8n](https://img.shields.io/badge/n8n-workflow-FF6D5A)](https://n8n.io)
@@ -7,24 +7,24 @@
 
 An intelligent Telegram bot built with n8n featuring **RAG (Retrieval Augmented Generation)** and **conversation memory**. The bot can chat naturally, generate images, remember context, and search through a knowledge base to provide accurate responses.
 
-## ✨ Features
+## Features
 
-### 🎯 Core Capabilities
-- **💬 Natural Conversations** - Context-aware chat with 10-message memory window
-- **🧠 RAG Technology** - Semantic search through knowledge base using vector embeddings
-- **🖼️ Image Generation** - DALL-E powered image creation
-- **📚 Dynamic Knowledge Base** - Add documents on-the-fly via Telegram commands
-- **🗄️ PostgreSQL Storage** - Persistent data with pgvector for semantic search
-- **🌍 Multi-language** - Supports Indonesian and English
+### Core Capabilities
+- **Natural Conversations** - Context-aware chat with 10-message memory window
+- **RAG Technology** - Semantic search through knowledge base using vector embeddings
+- **Image Generation** - DALL-E powered image creation
+- **Dynamic Knowledge Base** - Add documents on-the-fly via Telegram commands
+- **PostgreSQL Storage** - Persistent data with pgvector for semantic search
+- **Multi-language** - Supports Indonesian and English
 
-### 🛠️ Technical Features
+### Technical Features
 - Vector similarity search with pgvector
 - OpenAI embeddings (text-embedding-ada-002)
 - Automatic user management
 - Conversation history tracking
 - Efficient context window management
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - [n8n](https://n8n.io) v1.0+
@@ -67,7 +67,7 @@ psql -d telegram_bot -f database/seeds.sql
 Send to your bot: /start
 ```
 
-## 📖 Usage
+## Usage
 
 ### User Commands
 
@@ -95,10 +95,10 @@ Bot: [Generates and sends image]
 **Add Knowledge**
 ```
 User: /adddoc |Bot Info| |I can chat, generate images, and remember conversations| tutorial
-Bot: ✅ Document added successfully!
+Bot: Document added successfully!
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 Telegram User
@@ -134,7 +134,7 @@ Telegram User
 Telegram User (Response)
 ```
 
-## 🗄️ Database Schema
+## Database Schema
 
 - **users** - User profiles and preferences
 - **conversations** - Chat history with roles (user/assistant)
@@ -143,7 +143,7 @@ Telegram User (Response)
 
 See [database/schema.sql](database/schema.sql) for full schema.
 
-## ⚙️ Configuration
+## Configuration
 
 ### Customize Bot Personality
 
@@ -168,7 +168,7 @@ In "Search Knowledge Base" node:
 WHERE (1 - (e.embedding <=> '...'::vector)) > 0.7  -- Similarity threshold
 ```
 
-## 📊 Analytics
+## Analytics
 
 Run queries from `database/maintenance.sql`:
 
@@ -188,7 +188,7 @@ GROUP BY DATE(created_at)
 ORDER BY DATE(created_at) DESC;
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Test Conversation Memory
 ```
@@ -204,7 +204,7 @@ ORDER BY DATE(created_at) DESC;
 3. Bot should reference the added document
 ```
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
@@ -215,14 +215,14 @@ ORDER BY DATE(created_at) DESC;
 
 See [docs/INSTALLATION.md](docs/INSTALLATION.md) for detailed troubleshooting.
 
-## 📚 Documentation
+## Documentation
 
 - [Installation Guide](docs/INSTALLATION.md) - Detailed setup instructions
 - [Configuration Guide](docs/CONFIGURATION.md) - Advanced configuration options
 - [Database Schema](database/schema.sql) - Complete database structure
 - [Maintenance Queries](database/maintenance.sql) - Useful SQL queries
 
-## 🚦 Project Structure
+## Project Structure
 
 ```
 .
@@ -238,7 +238,7 @@ See [docs/INSTALLATION.md](docs/INSTALLATION.md) for detailed troubleshooting.
     └── CONFIGURATION.md      # Configuration guide
 ```
 
-## 🎯 Roadmap
+## Roadmap
 
 - [ ] Multi-user conversation threads
 - [ ] Voice message support
@@ -248,7 +248,7 @@ See [docs/INSTALLATION.md](docs/INSTALLATION.md) for detailed troubleshooting.
 - [ ] Rate limiting per user
 - [ ] Custom commands support
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
@@ -258,28 +258,28 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🌟 Acknowledgments
+## Acknowledgments
 
 - [n8n](https://n8n.io) - Workflow automation platform
 - [OpenAI](https://openai.com) - GPT-4 and DALL-E
 - [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search
 - [PostgreSQL](https://www.postgresql.org) - Database
 
-## 💬 Support
+## Support
 
-- 📖 [Documentation](docs/INSTALLATION.md)
-- 🐛 [Issue Tracker](https://github.com/gendonholaholo/n8n-telegram-aiBot/issues)
-- 💡 [Discussions](https://github.com/gendonholaholo/n8n-telegram-aiBot/discussions)
+- [Documentation](docs/INSTALLATION.md)
+- [Issue Tracker](https://github.com/gendonholaholo/n8n-telegram-aiBot/issues)
+- [Discussions](https://github.com/gendonholaholo/n8n-telegram-aiBot/discussions)
 
-## 🔗 Links
+## Links
 
 - **Demo Bot**: Contact [@your_bot_username](https://t.me/your_bot_username)
 - **Author**: [@gendonholaholo](https://github.com/gendonholaholo)
 
 ---
 
-**Made with ❤️ using n8n, PostgreSQL, and OpenAI**
+**Made with care using n8n, PostgreSQL, and OpenAI**
